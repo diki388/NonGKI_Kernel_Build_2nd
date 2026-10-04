@@ -1,0 +1,247 @@
+name: Build Xiaomi Redmi 10 (Selene) (Base A13)
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  # Device env
+  DEVICE_NAME : "redmi_10"
+  DEVICE_CODENAME : "selene"
+
+  CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
+  EXTRA_CMDS : "LD=ld.lld LLVM=1 LLVM_IAS=1"
+
+  KERNEL_SOURCE : "https://github.com/diki388/android_kernel_xiaomi_selene.git"
+  KERNEL_BRANCH : "base"
+
+  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.6/clang+llvm-14.0.6-x86_64-linux-gnu-rhel-8.4.tar.xz"
+  CLANG_BRANCH : ""
+
+  GCC_GNU : false
+  GCC_64_SOURCE : "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9.git"
+  GCC_64_BRANCH : "android12L-release"
+  GCC_32_SOURCE : "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9.git"
+  GCC_32_BRANCH : "android12L-release"
+
+  DEFCONFIG_SOURCE: ""
+  DEFCONFIG_NAME : "selene_defconfig"
+  DEFCONFIG_ORIGIN_IMAGE: ""
+  DEFCONFIG_FROM_BOOT: false
+
+  KERNELSU_SOURCE : ""
+  KERNELSU_BRANCH : ""
+
+  KERNELSU_AUTO_GET : "true" # if u want easy setting kernelsu, u can true.
+  KERNELSU_AUTO_FORK : "resukisu" # magic, rsuntk, next, resukisu and sukisu
+
+  SUSFS_ENABLE : true
+  SUSFS_FIXED : false
+
+  AK3_SOURCE : "https://github.com/osm0sis/AnyKernel3.git"
+  AK3_BRANCH : "master"
+
+  BOOT_SOURCE : ""
+
+  NEED_DTBO : false
+  NEED_SAFE_DTBO : false
+
+  ROM_TEXT : "base_a13"
+
+  # Other env
+  PYTHON_VERSION: "3" # Only 2(Ubuntu 22.04 and Ubuntu 20.04) or 3(Any OS Versions).
+
+  PACK_METHOD: "AnyKernel3" # AnyKernel3 need SOURCE and BRANCH, MKBOOTIMG needn't it.
+  PACK_KMODULES: "false" # if u want pack kernel modules (.ko) into AnyKernel3.
+
+  KERNELSU_METHOD: "shell" # shell, manual and only.
+
+  PATCHES_SOURCE: "JackA1ltman/NonGKI_Kernel_Patches" # [your_name]/[your_patch] -> gooder123/NonGKI_Patcher
+  PATCHES_BRANCH: "mi_kernel" # [your_branch] -> main
+
+  SUSFS_FOLDER_FIXED: "" # Fill in your patch prefix directory here. Leave it blank if there isn't one. -> your_folder
+  SUSFS_PATCH_FIXED: "" # Fill in your patches here. If there are multiple patches, please separate them with a comma. Leave it blank if there isn't one. -> patch1,patch2
+
+  REKERNEL_ENABLE: "false" # if u need Re:Kernel.
+  DROIDSPACES_ENABLE: "false" # if u need Droidspaces or LXC/Docker.
+  NOMOUNT_ENABLE: "false" # if u need NoMount.
+
+  HOOK_METHOD: "syscall" # Manual hook method -> syscall.
+
+  KPM_ENABLE: "false" # Anyone devices.
+  KPM_INLINE: "false" # Only use it for SukiSU-Ultra.
+  KPM_KPATCH_NEXT: "false" # If u want hook KPatch-Next in build step.
+  KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux" # If u want to use KPM Inline,so you need set patch exec file source -> raw.githubusercontent.com/Test/Test/patch .
+
+  BASEBAND_GUARD_ENABLE: "false" #if u want prevent unauthorized writes to critical partitions/device nodes.
+  BASEBAND_GUARD_BOOT: "false" #if u want to protect boot partition.
+
+  GENERATE_DTB: "false" # if u kernel need DTB , but cannot auto generate it. (Only AnyKernel3).
+  GENERATE_CHIP: "mediatek" # only supported for qcom and mediatek.
+
+  BUILD_DEBUGGER: "true" # Output build errors.
+  SKIP_PATCH: "true" # Ignore errors found in Patch Debugger. (selene: hunk gagal diperbaiki oleh step "Fix SUSFS rejected hunks")
+
+  BUILD_OTHER_CONFIG: "false" # Merge config files.
+  MERGE_CONFIG_FILES: ""
+
+  FREE_MORE_SPACE: "false" # if u want get more space, enabled it.
+
+jobs:
+  build-kernel:
+    name: Xiaomi Redmi 10 (Selene) (Base A13)
+    runs-on: ubuntu-24.04 # u can changed to ubuntu 22.04, and need container set ubuntu-24.04
+    # container: archlinux/archlinux:latest # if u need use arch linux -> archlinux/archlinux:latest or ubuntu 20.04 -> ubuntu:focal
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+
+    steps:
+      - name: ⏰ Checkout repository
+        uses: actions/checkout@v6
+
+      - name: ⌛️ Compilation environment preparation
+        uses: ./.github/workflows/build-env
+
+      - name: ⚙️ Get necessary tools
+        uses: ./.github/workflows/build-ready
+
+      - name: 🪝 Patch Kernel of SUSFS
+        uses: ./.github/workflows/patch-susfs
+
+      - name: 🩹 Fix SUSFS rejected hunks (selene)
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          python3 - <<'PYEOF'
+          import sys
+
+          def read(p):
+              with open(p, encoding="utf-8", errors="surrogateescape") as f:
+                  return f.read()
+
+          def write(p, s):
+              with open(p, "w", encoding="utf-8", errors="surrogateescape") as f:
+                  f.write(s)
+
+          def fail(msg, ctx=""):
+              print("[-] " + msg)
+              if ctx:
+                  print(ctx)
+              sys.exit(1)
+
+          # 1) fs/proc/task_mmu.c: include susfs_def.h (hunk #1 gagal di patch umum)
+          p = "fs/proc/task_mmu.c"
+          s = read(p)
+          if "linux/susfs_def.h" in s:
+              print("[=] task_mmu.c: include sudah ada, dilewati")
+          else:
+              cond = "defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)"
+              block = ("#if " + cond + "\n"
+                       "#include <linux/susfs_def.h>\n"
+                       "#endif // #if " + cond + "\n\n")
+              import re
+              m = re.search(r"^#include <asm/", s, re.M)
+              if not m:
+                  fail("task_mmu.c: anchor '#include <asm/' tidak ditemukan", "".join(s.splitlines(True)[:40]))
+              s = s[:m.start()] + block + s[m.start():]
+              write(p, s)
+              print("[+] task_mmu.c: include susfs_def.h ditambahkan")
+
+          # 1b) fs/proc/task_mmu.c: hook SUS_MAP (hunk #4) menempel di smap_gather_stats() (void) karena fuzz.
+          #     Di kernel ini yang benar adalah show_smap() (int). Pindahkan.
+          p = "fs/proc/task_mmu.c"
+          s = read(p)
+          blk = ("#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n"
+                 "\tif (vma->vm_file && SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))\n"
+                 "\t\treturn 0;\n"
+                 "#endif\n\n")
+          a = s.find("static void smap_gather_stats(")
+          if a >= 0:
+              b = s.find("\n}\n", a)
+              body = s[a:b]
+              if blk in body:
+                  s = s[:a] + body.replace(blk, "", 1) + s[b:]
+                  print("[+] task_mmu.c: hook SUS_MAP salah tempat di smap_gather_stats dihapus")
+          i = s.find("static int show_smap(struct seq_file *m, void *v")
+          if i < 0:
+              fail("task_mmu.c: show_smap() tidak ditemukan")
+          e = s.find("\n}\n", i)
+          fn = s[i:e]
+          if "SUSFS_IS_INODE_SUS_MAP" in fn:
+              print("[=] task_mmu.c: hook SUS_MAP di show_smap sudah ada, dilewati")
+          else:
+              k = fn.find("smap_gather_stats(vma, &mss);")
+              if k < 0:
+                  fail("task_mmu.c: 'smap_gather_stats(vma, &mss);' tidak ditemukan di show_smap", fn[:600])
+              k = fn.rfind("\n", 0, k) + 1
+              fn = fn[:k] + blk + fn[k:]
+              s = s[:i] + fn + s[e:]
+              print("[+] task_mmu.c: hook SUS_MAP ditambahkan di show_smap")
+          write(p, s)
+          a = s.find("static void smap_gather_stats(")
+          b = s.find("\n}\n", a)
+          if "SUSFS_IS_INODE_SUS_MAP" in s[a:b]:
+              fail("task_mmu.c: hook SUS_MAP masih ada di smap_gather_stats (void)")
+
+          # 2) kernel/sys.c: hook spoof uname di newuname (hunk #1 gagal di patch umum)
+          p = "kernel/sys.c"
+          s = read(p)
+          if "susfs_spoof_uname" in s:
+              print("[=] sys.c: hook uname sudah ada, dilewati")
+          else:
+              i = s.find("SYSCALL_DEFINE1(newuname")
+              if i < 0:
+                  fail("sys.c: SYSCALL_DEFINE1(newuname) tidak ditemukan")
+              needle = "memcpy(&tmp, utsname(), sizeof(tmp));\n"
+              j = s.find(needle, i)
+              if j < 0 or j - i > 600:
+                  fail("sys.c: baris memcpy(&tmp, utsname()...) tidak ditemukan di newuname", s[i:i + 700])
+              k = j + len(needle)
+              decl = ("#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME\n"
+                      "extern struct static_key_false susfs_is_uname_spoof_buffer_set;\n"
+                      "extern void susfs_spoof_uname(struct new_utsname* tmp);\n"
+                      "#endif\n")
+              hook = ("#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME\n"
+                      "\tif (static_branch_likely(&susfs_is_uname_spoof_buffer_set))\n"
+                      "\t\tsusfs_spoof_uname(&tmp);\n"
+                      "#endif\n")
+              s = s[:i] + decl + s[i:k] + hook + s[k:]
+              write(p, s)
+              print("[+] sys.c: hook spoof uname ditambahkan")
+          PYEOF
+
+          grep -q "linux/susfs_def.h" fs/proc/task_mmu.c
+          grep -q "susfs_spoof_uname" kernel/sys.c
+          echo "[+] Perbaikan hunk SUSFS selesai. Diff untuk diperiksa:"
+          git --no-pager diff -U2 -- fs/proc/task_mmu.c kernel/sys.c | head -300 || true
+
+      - name: 🔗 Patch for no-kprobe
+        uses: ./.github/workflows/patch-no-kprobe
+
+      - name: 🪛 Extra Kernel Options
+        run: |
+          # Only ${{ env.DEVICE_NAME }} use it.
+          cd $GITHUB_WORKSPACE/device_kernel
+          # Nothing
+
+      - name: 🧰 Patch Kernel of Re:Kernel
+        uses: ./.github/workflows/patch-rekernel
+
+      - name: 💿 Patch Kernel of Droidspaces
+        uses: ./.github/workflows/patch-droidspaces
+
+      - name: 🔒 Patch Kernel of Baseband Guard
+        uses: ./.github/workflows/patch-baseband-guard
+
+      - name: 🛡️ Patch Kernel of NoMount
+        uses: ./.github/workflows/patch-nomount
+
+      - name: 🚀 Build Process
+        uses: ./.github/workflows/build-process
+
+      - name: 🔩 Pack Process
+        uses: ./.github/workflows/pack-process
+
+      - name: ✏️ Upload Artifacts
+        uses: ./.github/workflows/upload-files
